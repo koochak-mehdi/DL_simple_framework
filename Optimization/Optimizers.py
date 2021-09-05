@@ -1,38 +1,61 @@
-from Optimization import Constraints
+from typing import ContextManager
 import numpy as np
 
 class Optimizer:
     def __init__(self) -> None:
         self.regularizer = None
         pass
-    def add_regularizer(self,regularizer):
-        self.regularizer= regularizer
+    def add_regularizer(self, regularizer):
+        self.regularizer = regularizer
 
-class Sgd(Optimizer): 
+class Sgd(Optimizer):
     def __init__(self, learning_rate):
-        self.learning_rate= learning_rate
+        self.learning_rate = learning_rate
         super().__init__()
 
     def add_regularizer(self, regularizer):
         return super().add_regularizer(regularizer)
 
-    def calculate_update (self, weight_tensor, gradient_tensor):
-        constraint = 0
-        if self.regularizer is not None : 
-            constraint = self.regularizer.calculate_gradient(weight_tensor)
-
-        uploeaded_weight= (weight_tensor-constraint* self.learning_rate) - np.dot(self.learning_rate, gradient_tensor)
-
-
-        return uploeaded_weight
-
+    def calculate_update(self, weight_tensor, gradient_tensor):
+        cons_term = 0
+        if self.regularizer is not None:
+            cons_term = self.regularizer.calculate_gradient(weight_tensor)
+            
+        return weight_tensor - cons_term* self.learning_rate - np.dot(self.learning_rate, gradient_tensor)
 
 
 class SgdWithMomentum(Optimizer):
-    def __init__(self, learning_rate , momentum_rate):
-        self.learning_rate=learning_rate
-        self.momentum_rate= momentum_rate
-        self.v=None
+    def __init__(self, learning_rate, momentum_rate) -> None:
+        self.learning_rate = learning_rate
+        self.momentum_rate = momentum_rate
+        self.cache = None
+        super().__init__()
+
+    def add_regularizer(self, regularizer):
+        return super().add_regularizer(regularizer)        
+
+    def calculate_update(self, weight_tensor, gradient_tensor):
+        cons_term = 0
+        if self.regularizer is not None:
+            cons_term = self.regularizer.calculate_gradient(weight_tensor)
+
+        if self.cache is None:
+            self.cache = np.zeros_like(weight_tensor)
+        
+        v = np.subtract(np.dot(self.momentum_rate, self.cache),
+                        np.dot(self.learning_rate, gradient_tensor))
+
+        self.cache = v
+        return weight_tensor - self.learning_rate*cons_term + v
+
+
+class Adam(Optimizer):
+    def __init__(self, learning_rate, mu, rho) -> None:
+        self.learning_rate = learning_rate
+        self.mu = mu
+        self.rho = rho
+        self.cache = dict()
+        self.eps = np.finfo(float).eps
         super().__init__()
         pass
 
@@ -40,53 +63,27 @@ class SgdWithMomentum(Optimizer):
         return super().add_regularizer(regularizer)
 
     def calculate_update(self, weight_tensor, gradient_tensor):
-        constraint = 0
+        cons_term = 0
         if self.regularizer is not None:
-            constraint = self.regularizer.calculate_gradient(weight_tensor)
+            cons_term = self.regularizer.calculate_gradient(weight_tensor)
 
-        if self.v is None:
-        # self.v = np.zeros(weight_tensor.shape)
-            self.v = np.zeros_like(weight_tensor)
-        self.v= np.subtract(np.dot(self.momentum_rate , self.v), 
-                        np.dot(self.learning_rate, gradient_tensor))
+        if len(self.cache) == 0:
+            self.cache['v'] = np.zeros_like(weight_tensor)
+            self.cache['r'] = np.zeros_like(weight_tensor)
+            self.cache['k'] = 1
 
-        return (weight_tensor - constraint* self.learning_rate) + self.v
+        v = np.dot(self.mu, self.cache['v']) + \
+                np.dot((1 - self.mu), gradient_tensor)
+        r = np.dot(self.rho, self.cache['r']) + \
+                np.dot((1 - self.rho), np.square(gradient_tensor))
 
+        v_hat = np.divide(v, (1 - np.power(self.mu, self.cache['k'])))
+        r_hat = np.divide(r, (1 - np.power(self.rho, self.cache['k'])))
 
-class Adam(Optimizer):
-    def __init__(self, learning_rate, mu , rho):
-        self.learning_rate=learning_rate
-        self.mu=mu
-        self.rho=rho
-        self.v=None
-        self.r=None
-        self.k=1
-        self.epsilon= np.finfo(float).eps
-        super().__init__()
-    
-    def add_regularizer(self, regularizer):
-        return super().add_regularizer(regularizer)
+        self.cache['v'] = v
+        self.cache['r'] = r
+        self.cache['k'] += 1
 
-    def calculate_update(self, weight_tensor, gradient_tensor):
-        constraint = 0
-        if self.regularizer is not None:
-            constraint = self.regularizer.calculate_gradient(weight_tensor)
-        if self.v is None :
-            self.v= np.dot((1-self.mu), gradient_tensor)
-        else:
-            self.v= np.dot(self.mu,self.v) + np.dot((1-self.mu), gradient_tensor)
-        
-        if self.r is None:
-            self.r= np.dot((1-self.rho), np.square(gradient_tensor))
-        else:
-            self.r= np.dot(self.rho, self.r) + np.dot((1-self.rho), np.square(gradient_tensor))
-
-        v_hat= np.divide(self.v, (1-np.power(self.mu, self.k)))
-        r_hat= np.divide(self.r, (1-np.power(self.rho, self.k)))
-
-        self.k+=1
-
-        return (weight_tensor - self.learning_rate * constraint) - np.dot(self.learning_rate, 
-                                np.divide(v_hat,np.sqrt(r_hat)+ self.epsilon))
-    #weight = optimizer.calculate_update(weight, gradW)
-    
+        return np.subtract(weight_tensor - cons_term*self.learning_rate, 
+                        np.dot(self.learning_rate, (np.divide(v_hat, 
+                                                        np.sqrt(r_hat) + self.eps))))
